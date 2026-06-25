@@ -4,44 +4,38 @@ using TMPro;
 
 public class WriteBarTel : MonoBehaviour
 {
-    [Header("UI Elements")]
-    [SerializeField] private RectTransform messagePanel;
+    [Header("UI")]
+    [SerializeField] private RectTransform inputPanel;
+    [SerializeField] private RectTransform messagesArea;
     [SerializeField] private TMP_InputField inputField;
     [SerializeField] private Button sendButton;
     [SerializeField] private ChatManager chatManager;
 
-    [Header("Keyboard Settings")]
-    [SerializeField] private float bottomPadding = 16f;
+    [Header("Settings")]
     [SerializeField] private float smoothTime = 0.08f;
-    [SerializeField] private bool debugKeyboard = false;
+    [SerializeField] private float extraPadding = 10f;
 
-    private Canvas parentCanvas;
-    private Vector2 baseAnchoredPosition;
+    private Canvas canvas;
+    private Vector2 inputBasePos;
     private Vector2 velocity;
+
+    private float originalMessagesBottom;
     private bool initialized;
-    private bool keyboardWasVisible;
 
     private void Awake()
     {
         if (chatManager == null)
-        {
-            chatManager = FindObjectOfType<ChatManager>();
-        }
+            chatManager = FindFirstObjectByType<ChatManager>();
 
         if (inputField == null && chatManager != null)
-        {
             inputField = chatManager.inputField;
-        }
 
-        if (messagePanel == null && inputField != null)
-        {
-            messagePanel = inputField.transform.parent as RectTransform;
-        }
+        canvas = GetComponentInParent<Canvas>();
 
-        if (messagePanel != null)
+        if (inputPanel != null && messagesArea != null)
         {
-            parentCanvas = messagePanel.GetComponentInParent<Canvas>();
-            baseAnchoredPosition = messagePanel.anchoredPosition;
+            inputBasePos = inputPanel.anchoredPosition;
+            originalMessagesBottom = messagesArea.offsetMin.y;
             initialized = true;
         }
     }
@@ -53,96 +47,87 @@ public class WriteBarTel : MonoBehaviour
             sendButton.onClick.RemoveAllListeners();
             sendButton.onClick.AddListener(OnSendPressed);
         }
-
-        if (inputField != null)
-        {
-            inputField.onSelect.AddListener(OnInputSelected);
-            inputField.onDeselect.AddListener(OnInputDeselected);
-        }
-
-        if (!initialized)
-        {
-            Debug.LogWarning("WriteBarTel: messagePanel ou inputField não configurados. Arraste as referências no Inspector.", this);
-        }
-
-        if (sendButton == null)
-        {
-            Debug.LogWarning("WriteBarTel: sendButton não atribuído. O botão de enviar não funcionará.", this);
-        }
     }
 
     private void Update()
     {
+#if UNITY_ANDROID || UNITY_IOS
+
         if (!initialized)
             return;
 
-        bool keyboardVisible = TouchScreenKeyboard.visible || (inputField != null && inputField.isFocused);
-        float targetY = baseAnchoredPosition.y;
+        float keyboardHeight = GetKeyboardHeight();
 
-        if (keyboardVisible)
+        if (keyboardHeight > 0)
         {
-            float keyboardHeight = GetKeyboardHeight();
-            float canvasScale = parentCanvas != null ? parentCanvas.scaleFactor : 1f;
-            float offset = (keyboardHeight / canvasScale) + bottomPadding;
-            targetY = baseAnchoredPosition.y + offset;
-            keyboardWasVisible = true;
+            MoveAboveKeyboard(keyboardHeight);
         }
-        else if (keyboardWasVisible)
+        else
         {
-            targetY = baseAnchoredPosition.y;
-            keyboardWasVisible = false;
+            RestoreLayout();
         }
 
-        Vector2 targetPosition = new Vector2(baseAnchoredPosition.x, targetY);
-        messagePanel.anchoredPosition = Vector2.SmoothDamp(messagePanel.anchoredPosition, targetPosition, ref velocity, smoothTime);
+#endif
+    }
 
-        if (debugKeyboard)
-        {
-            Debug.Log($"WriteBarTel: visible={keyboardVisible}, keyboardHeight={GetKeyboardHeight()}, targetY={targetY}");
-        }
+    private void MoveAboveKeyboard(float keyboardHeight)
+    {
+        float scale = canvas != null ? canvas.scaleFactor : 1f;
+
+        float keyboardCanvasHeight =
+            (keyboardHeight / scale) + extraPadding;
+
+        Vector2 targetPos = new Vector2(
+            inputBasePos.x,
+            inputBasePos.y + keyboardCanvasHeight
+        );
+
+        inputPanel.anchoredPosition =
+            Vector2.SmoothDamp(
+                inputPanel.anchoredPosition,
+                targetPos,
+                ref velocity,
+                smoothTime
+            );
+
+        float bottomSpace =
+            originalMessagesBottom +
+            keyboardCanvasHeight +
+            inputPanel.rect.height;
+
+        messagesArea.offsetMin = new Vector2(
+            messagesArea.offsetMin.x,
+            bottomSpace
+        );
+    }
+
+    private void RestoreLayout()
+    {
+        inputPanel.anchoredPosition =
+            Vector2.SmoothDamp(
+                inputPanel.anchoredPosition,
+                inputBasePos,
+                ref velocity,
+                smoothTime
+            );
+
+        messagesArea.offsetMin = new Vector2(
+            messagesArea.offsetMin.x,
+            originalMessagesBottom
+        );
     }
 
     private float GetKeyboardHeight()
     {
-        if (TouchScreenKeyboard.visible)
-        {
-            float height = TouchScreenKeyboard.area.height;
-            if (height > 0f)
-            {
-                return height;
-            }
-        }
+        if (!TouchScreenKeyboard.visible)
+            return 0;
 
-        Rect safeArea = Screen.safeArea;
-        float safeBottom = safeArea.yMin;
-        float fallbackHeight = Screen.height * 0.36f;
+        float height = TouchScreenKeyboard.area.height;
 
-        if (safeBottom > 0f)
-        {
-            float keyboardGuess = Screen.height - safeArea.height - safeBottom;
-            if (keyboardGuess > 0f)
-            {
-                return keyboardGuess;
-            }
-        }
+        if (height > 0)
+            return height;
 
-        return fallbackHeight;
-    }
-
-    private void OnInputSelected(string text)
-    {
-        if (debugKeyboard)
-        {
-            Debug.Log("WriteBarTel: input selected");
-        }
-    }
-
-    private void OnInputDeselected(string text)
-    {
-        if (messagePanel != null)
-        {
-            messagePanel.anchoredPosition = baseAnchoredPosition;
-        }
+        return Screen.height * 0.4f;
     }
 
     private void OnSendPressed()
@@ -151,10 +136,12 @@ public class WriteBarTel : MonoBehaviour
             return;
 
         string message = inputField.text.Trim();
+
         if (string.IsNullOrEmpty(message))
             return;
 
         chatManager.SubmitMessage(message);
+
         inputField.text = string.Empty;
         inputField.ActivateInputField();
     }
